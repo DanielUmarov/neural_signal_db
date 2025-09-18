@@ -1,0 +1,5 @@
+subject_id,run_code,task_label,raw_path,sidecar_path,source,created_utc
+S001,3,MI_left_right_hands,recordings/public/physionet_MI/raw/S001_run03.edf,recordings/public/physionet_MI/sidecar_json/S001_run03.json,physionet_eegbci (eegmmidb/1.0.0),2025-09-18T02:29:49.724013Z
+S001,7,MI_left_right_hands,recordings/public/physionet_MI/raw/S001_run07.edf,recordings/public/physionet_MI/sidecar_json/S001_run07.json,physionet_eegbci (eegmmidb/1.0.0),2025-09-18T02:29:49.740853Z
+S001,03,MI_left_right_hands,recordings/public/physionet_MI/raw/S001_run03.edf,recordings/public/physionet_MI/sidecar_json/S001_run03.json,physionet_eegbci (eegmmidb/1.0.0),2025-09-18T02:34:25.687733+00:00
+S001,07,MI_left_right_hands,recordings/public/physionet_MI/raw/S001_run07.edf,recordings/public/physionet_MI/sidecar_json/S001_run07.json,physionet_eegbci (eegmmidb/1.0.0),2025-09-18T02:34:25.703275+00:00
