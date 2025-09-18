@@ -1,0 +1,12 @@
+{
+  "source": "physionet_eegbci (eegmmidb/1.0.0)",
+  "subject_id": "S001",
+  "run_code": "07",
+  "task_label": "MI_left_right_hands",
+  "task_desc": "Motor imagery: left vs right hands (repeat)",
+  "n_channels": 64,
+  "sfreq_hz": 160.0,
+  "device": "EDF (EEGBCI)",
+  "created_utc": "2025-09-18T02:20:32.845162Z",
+  "path_raw": "recordings/public/physionet_MI/raw/S001_run07.edf"
+}
