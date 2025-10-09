@@ -1,0 +1,329 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+EEG QC (metrics-only) with:
+- Robust EDF loading (handles non-UTF8 annotations),
+- Variance & flat/high-variance flags,
+- Mains (50/60 Hz) suggestion from median PSD,
+- Per-file outputs inside a single run folder,
+- Rolling CSVs that upsert rows so you can add files slowly.
+
+Run from your repo root (same place as recordings/):
+    python eeg_qc_metrics.py
+"""
+
+import json
+import warnings
+import shutil
+from datetime import datetime
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import mne
+
+# -------------------- CONFIG --------------------
+def project_root(start: Path = Path.cwd()) -> Path:
+    p = start.resolve()
+    for _ in range(12):
+        if (p / ".git").exists():
+            return p
+        if p.parent == p:
+            break
+        p = p.parent
+    return start.resolve()
+
+PROJECT = project_root()
+BASE    = PROJECT / "recordings" / "public" / "physionet_MI" / "raw"
+OUTDIR  = PROJECT / "quality_control"
+
+# Run folder: overwrite mode (always use runs/current, delete before each run)
+RUNS     = OUTDIR / "runs"
+RUN_MODE = "overwrite"        # set to "timestamp" for 20250922_143015-style folders
+RUN_NAME = "current"          # used only if RUN_MODE == "overwrite"
+if RUN_MODE == "timestamp":
+    RUN_NAME = datetime.now().strftime("%Y%m%d_%H%M%S")
+RUN_DIR  = RUNS / RUN_NAME
+
+# Montage is optional and only used for setting positions (not required for metrics)
+MONTAGE  = "standard_1020"   # or None / path to montage file
+EOG_CHS  = []                # only recorded in JSON; not used for metrics
+
+# Rolling CSVs (incremental upsert across runs)
+ROLLING_SUMMARY  = OUTDIR / "rolling_combined_qc_summary.csv"
+ROLLING_CHANNELS = OUTDIR / "rolling_qc_channel_metrics.csv"
+
+# -------------------- Setup --------------------
+warnings.filterwarnings("ignore", category=RuntimeWarning)
+mne.set_log_level("WARNING")
+
+def _ensure_dir(p: Path):
+    p.mkdir(parents=True, exist_ok=True)
+
+def _upsert_csv(csv_path: Path, new_df: pd.DataFrame, key_cols: list[str]) -> None:
+    """
+    Append or update rows keyed by key_cols; writes a de-duplicated CSV.
+    Latest row for each key wins.
+    """
+    _ensure_dir(csv_path.parent)
+    if csv_path.exists():
+        old = pd.read_csv(csv_path)
+        # Align columns (union) so schema changes don't break appends
+        merged_cols = list(dict.fromkeys(old.columns.tolist() + new_df.columns.tolist()))
+        old = old.reindex(columns=merged_cols)
+        new_df = new_df.reindex(columns=merged_cols)
+        cat = pd.concat([old, new_df], ignore_index=True)
+        cat = cat.drop_duplicates(subset=key_cols, keep="last")
+    else:
+        cat = new_df.copy()
+    cat.to_csv(csv_path, index=False)
+
+# -------------------- Robust EDF load --------------------
+def read_edf_with_encoding_fallback(edf_path, preload=True, verbose=False):
+    """
+    Read EDF trying common encodings for annotations.
+    Fixes UnicodeDecodeError seen in some PhysioNet MI files.
+    """
+    last_err = None
+    for enc in ("utf-8", "latin1", "cp1252"):
+        try:
+            return mne.io.read_raw_edf(
+                str(edf_path), preload=preload, verbose=verbose,
+                encoding=enc, stim_channel="auto"
+            )
+        except Exception as e:
+            last_err = e
+    raise last_err
+
+def guess_types_by_name(raw):
+    """Infer EOG/ECG/EMG by channel name; set via Raw.set_channel_types."""
+    mapping = {}
+    for ch in raw.ch_names:
+        lc = ch.lower()
+        if any(t in lc for t in ("eog", "heog", "veog")):
+            mapping[ch] = "eog"
+        elif "ecg" in lc or "ekg" in lc:
+            mapping[ch] = "ecg"
+        elif "emg" in lc:
+            mapping[ch] = "emg"
+    if mapping:
+        raw.set_channel_types(mapping)
+    return raw
+
+# -------------------- PSD / mains suggestion --------------------
+def _compute_welch_psd(raw, fmin=1, fmax=70, n_fft=2048, n_overlap=1024, n_per_seg=2048):
+    eeg = raw.copy().pick("eeg")
+    if hasattr(eeg, "compute_psd"):  # MNE ≥ 1.2
+        psd = eeg.compute_psd(method="welch",
+                              fmin=fmin, fmax=fmax,
+                              n_fft=n_fft, n_overlap=n_overlap, n_per_seg=n_per_seg,
+                              verbose=False)
+        return psd.get_data(), psd.freqs
+    else:  # older API fallback
+        from mne.time_frequency import psd_welch
+        return psd_welch(eeg, fmin=fmin, fmax=fmax,
+                         n_fft=n_fft, n_overlap=n_overlap, n_per_seg=n_per_seg,
+                         average="median")
+
+def detect_line_noise_psd(raw, fmin=1, fmax=70):
+    """
+    Decide 50 vs 60 Hz mains by harmonic energy in median PSD.
+    Returns a list of suggested notch frequencies, e.g., [60, 120] or [50, 100],
+    or [50, 60] when evidence is weak.
+    """
+    psds, freqs = _compute_welch_psd(raw, fmin=fmin, fmax=fmax)
+    med_psd = np.median(psds, axis=0)
+
+    peaks = {}
+    for base in (50.0, 60.0):
+        harmonics = [base * k for k in range(1, int(fmax // base) + 1)]
+        vals = []
+        for h in harmonics:
+            band = (freqs >= h - 1.0) & (freqs <= h + 1.0)
+            vals.append(med_psd[band].mean() if band.any() else 0.0)
+        peaks[base] = float(np.mean(vals)) if vals else 0.0
+
+    best = max(peaks, key=peaks.get)
+    if peaks[best] < (med_psd.mean() * 1.5):
+        return [50, 60]  # weak evidence: suggest both families
+    else:
+        return [int(best * k) for k in range(1, int(fmax // best) + 1)]
+
+# -------------------- Variance & flags --------------------
+def score_bad_channels(raw, flat_uV=1.0, highvar_z=4.0):
+    """
+    Return (flat_channels, highvar_channels, per-channel variance dict).
+    - flat via peak-to-peak (μV) < flat_uV
+    - high variance via Z-score > highvar_z
+    """
+    data, _ = raw.get_data(reject_by_annotation="NaN", return_times=True)
+    eeg_picks = mne.pick_types(raw.info, eeg=True)
+    data = data[eeg_picks] * 1e6  # μV
+    ch_names = np.array(raw.ch_names)[eeg_picks]
+
+    ptp = np.ptp(data, axis=1)
+    flat = ch_names[ptp < flat_uV]
+
+    var = data.var(axis=1)
+    z = (var - var.mean()) / (var.std(ddof=1) + 1e-12)
+    highvar = ch_names[z > highvar_z]
+
+    return list(flat), list(highvar), dict(zip(ch_names, var))
+
+# -------------------- Per-file runner --------------------
+def run_qc_for_file(edf_path: Path, out_root: Path):
+    stem   = edf_path.stem
+    outdir = out_root / stem
+    _ensure_dir(outdir)
+
+    metrics_csv  = outdir / f"{stem}_qc_metrics.csv"
+    summary_json = outdir / f"{stem}_qc_summary.json"
+
+    # Load
+    raw = read_edf_with_encoding_fallback(edf_path, preload=True, verbose=False)
+    if len(mne.pick_types(raw.info, eeg=True, eog=True, ecg=True)) == 0:
+        raw = guess_types_by_name(raw)
+
+    # Montage (optional)
+    if MONTAGE:
+        try:
+            raw.set_montage(MONTAGE, on_missing="warn")
+        except Exception as e:
+            print(f"[WARN] montage not applied for {stem}: {e}")
+
+    # Metrics
+    notch_suggested = detect_line_noise_psd(raw, fmin=1, fmax=70)
+    flat, highvar, var_dict = score_bad_channels(raw, flat_uV=1.0, highvar_z=4.0)
+
+    # Per-channel CSV
+    pd.DataFrame(
+        [{"file": stem, "channel": ch, "variance_uV2": v,
+          "flatline": ch in flat, "highvar": ch in highvar}
+         for ch, v in var_dict.items()]
+    ).to_csv(metrics_csv, index=False)
+
+    # Summary JSON
+    summary = {
+        "file": str(edf_path),
+        "stem": stem,
+        "suggested_notch_freqs": notch_suggested,  # e.g., [60,120] / [50,100] / [50,60]
+        "bandpass_hint_hz": [1.0, 40.0],           # editable hint; actual filtering done elsewhere
+        "flat_channels": flat,
+        "high_variance_channels": highvar,
+        "n_channels": int(len(var_dict)),
+        "eog_channels_listed": EOG_CHS,
+        "outputs": {
+            "metrics_csv": str(metrics_csv),
+            "summary_json": str(summary_json),
+        },
+        "notes": "Use a separate notebook to convert these metrics into filtering settings.",
+    }
+    with open(summary_json, "w") as f:
+        json.dump(summary, f, indent=2)
+
+    return summary, metrics_csv
+
+# -------------------- Main --------------------
+def main():
+    print(f"PROJECT: {PROJECT}")
+    print(f"BASE:    {BASE}")
+    print(f"OUTDIR:  {OUTDIR}")
+
+    if not BASE.exists():
+        raise FileNotFoundError(f"BASE not found: {BASE}")
+
+    # Prepare run folder (overwrite or timestamp)
+    if RUN_MODE == "overwrite" and RUN_DIR.exists():
+        shutil.rmtree(RUN_DIR)
+    _ensure_dir(RUN_DIR)
+
+    # pointer to latest run (used by notebook convenience)
+    (OUTDIR / "LATEST_RUN.txt").write_text(str(RUN_DIR.resolve()))
+    print(f"RUN_DIR: {RUN_DIR}")
+
+    edfs = sorted(BASE.rglob("*.edf"))
+    if not edfs:
+        print("No EDFs found.")
+        return
+
+    # Per-run aggregation
+    per_run_summaries = []
+    per_run_metrics_paths = []
+
+    for edf_path in edfs:
+        try:
+            print(f"[QC] {edf_path.name}")
+            summary, metrics_csv_path = run_qc_for_file(edf_path, RUN_DIR)
+            per_run_summaries.append(summary)
+            per_run_metrics_paths.append(metrics_csv_path)
+
+            # Incremental UPSERTS after each file
+            run_ts = datetime.now().isoformat(timespec="seconds")
+
+            row = pd.DataFrame([{
+                "run_ts": run_ts,
+                "stem": summary["stem"],
+                "suggested_notch_freqs": summary.get("suggested_notch_freqs", []),
+                "bandpass_hint_hz": summary.get("bandpass_hint_hz", [1.0, 40.0]),
+                "n_channels": summary.get("n_channels", None),
+                "n_flat": len(summary.get("flat_channels", [])),
+                "n_highvar": len(summary.get("high_variance_channels", [])),
+                "summary_json": summary["outputs"]["summary_json"],
+                "metrics_csv": summary["outputs"]["metrics_csv"],
+                "run_dir": str(RUN_DIR),
+            }])
+            _upsert_csv(ROLLING_SUMMARY, row, key_cols=["stem"])
+
+            try:
+                ch_df = pd.read_csv(metrics_csv_path)
+                ch_df.insert(0, "run_ts", run_ts)
+                ch_df.insert(1, "run_dir", str(RUN_DIR))
+                _upsert_csv(ROLLING_CHANNELS, ch_df, key_cols=["file", "channel"])
+            except Exception as e:
+                print(f"[WARN] could not append channel metrics for {summary['stem']}: {e}")
+
+        except Exception as e:
+            print(f"[ERROR] {edf_path.name}: {e}")
+
+    # Per-run combined CSVs (inside RUN_DIR)
+    if per_run_summaries:
+        df_run = pd.DataFrame(per_run_summaries)
+        combined_csv = RUN_DIR / "combined_qc_summary.csv"
+        df_run[["stem", "suggested_notch_freqs", "bandpass_hint_hz",
+                "flat_channels", "high_variance_channels", "n_channels"]].to_csv(combined_csv, index=False)
+        print(f"[OK] saved -> {combined_csv}")
+
+        frames = []
+        for p in per_run_metrics_paths:
+            try:
+                frames.append(pd.read_csv(p).assign(metrics_csv=str(p)))
+            except Exception as e:
+                print(f"[WARN] read {p}: {e}")
+        if frames:
+            big = pd.concat(frames, ignore_index=True)
+            big_csv = RUN_DIR / "combined_qc_channel_metrics.csv"
+            big.to_csv(big_csv, index=False)
+            print(f"[OK] saved -> {big_csv}")
+
+        # Optional: refresh a master CSV across all runs (not required for overwrite mode)
+        try:
+            all_runs_dir = OUTDIR / "runs"
+            master_csv   = OUTDIR / "master_combined_qc_summary.csv"
+            frames = []
+            if all_runs_dir.exists():
+                for rdir in sorted(all_runs_dir.iterdir()):
+                    csv_path = rdir / "combined_qc_summary.csv"
+                    if csv_path.exists():
+                        df_r = pd.read_csv(csv_path)
+                        df_r.insert(0, "run_dir", str(rdir))
+                        frames.append(df_r)
+            if frames:
+                master = pd.concat(frames, ignore_index=True)
+                master.to_csv(master_csv, index=False)
+                print(f"[OK] refreshed master -> {master_csv}")
+        except Exception as e:
+            print(f"[WARN] could not refresh master CSV: {e}")
+
+if __name__ == "__main__":
+    main()

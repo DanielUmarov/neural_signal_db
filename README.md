@@ -34,6 +34,85 @@ Always generate QC plots (before/after filtering, FFT, etc.) to confirm:
 - Signals are within expected frequency bands  
 - SSVEP peaks, P300 responses, or MI rhythms are visible  
 
+
+## PhysioNet MI Scraper (not necessary anymore)
+
+The **Motor Imagery (MI)** dataset from PhysioNet provides clean, standardized EEG recordings for left/right hand and foot movement imagination tasks.  
+This data serves as a benchmark for testing signal processing and classification pipelines before applying them to our own recordings.
+
+
+
+## SSVEP Workflow (MAMEM Dataset)
+
+The MAMEM SSVEP dataset provides large-scale EEG recordings of steady-state visual evoked potentials — brain responses to periodic visual flickers at known frequencies.
+It’s used to validate our signal-cleaning and frequency-tagging pipeline and benchmark our Ultracortex SSVEP protocols.
+
+### Dataset Overview
+
+Source: PhysioNet MAMEM SSVEP
+
+#### Experiments:
+```
+dataset1 → 250 Hz sampling rate, 256 channels
+
+dataset2 → 250 Hz sampling rate, 256 channels
+
+dataset3 → 128 Hz sampling rate, 256 channels
+
+Each subject/session includes:
+
+.dat → raw EEG waveform
+
+.hea → header with channel info and sampling rate
+
+.flash → individual flash events
+
+.win → 5-second window annotations with stimulus frequency labels
+```
+
+#### Step 1: Download Raw WFDB Datasets
+``` aws s3 sync --no-sign-request s3://physionet-open/mssvepdb/1.0.0/dataset1/ recordings/public/SSVEP_MAMEM/raw/dataset1
+aws s3 sync --no-sign-request s3://physionet-open/mssvepdb/1.0.0/dataset2/ recordings/public/SSVEP_MAMEM/raw/dataset2
+aws s3 sync --no-sign-request s3://physionet-open/mssvepdb/1.0.0/dataset3/ recordings/public/SSVEP_MAMEM/raw/dataset3
+```
+
+Resulting Folder structure:
+```
+recordings/public/SSVEP_MAMEM/raw/
+├── dataset1/
+├── dataset2/
+└── dataset3/
+```
+
+#### Step 2: Convert WFDB → EDF
+
+py scripts/mamem_ssvep_convert.py `
+  --dataset dataset1 `
+  --src-dir "recordings/public/SSVEP_MAMEM/raw/dataset1" `
+  --root "recordings/public/SSVEP_MAMEM/edf" `
+  --overwrite
+
+
+Repeat for dataset2 and dataset3.
+
+##### Conversion process:
+The mamem_ssvep_convert file converts .dat/.hea pairs to .edf using wfdb + mne + edfio.
+
+Automatically fixes duplicate or missing channel names.
+
+Generates JSON sidecars with:
+
+- Sampling rate and channel count
+
+- Subject/session IDs
+
+- Stimulus frequency and duration
+
+- Timestamp and file references
+
+
+
+
 ## Contributing
 When committing:  
 1. Create a new branch for your work  

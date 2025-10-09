@@ -1,0 +1,11 @@
+run_dir,stem,suggested_notch_freqs,bandpass_hint_hz,flat_channels,high_variance_channels,n_channels
+C:\Users\rjrie\Documents\neural_signal_db\quality_control\runs\current,S001_run01,"[50, 60]","[1.0, 40.0]",[],[],64
+C:\Users\rjrie\Documents\neural_signal_db\quality_control\runs\current,S001_run02,"[50, 60]","[1.0, 40.0]",[],[],64
+C:\Users\rjrie\Documents\neural_signal_db\quality_control\runs\current,S001_run03,"[50, 60]","[1.0, 40.0]",[],[],64
+C:\Users\rjrie\Documents\neural_signal_db\quality_control\runs\current,S001_run07,"[50, 60]","[1.0, 40.0]",[],[],64
+C:\Users\rjrie\Documents\neural_signal_db\quality_control\runs\current,S001_run11,"[50, 60]","[1.0, 40.0]",[],[],64
+C:\Users\rjrie\Documents\neural_signal_db\quality_control\runs\current,S002_run01,"[50, 60]","[1.0, 40.0]",[],[],64
+C:\Users\rjrie\Documents\neural_signal_db\quality_control\runs\current,S002_run02,"[50, 60]","[1.0, 40.0]",[],[],64
+C:\Users\rjrie\Documents\neural_signal_db\quality_control\runs\current,S002_run03,"[50, 60]","[1.0, 40.0]",[],[np.str_('Af7.')],64
+C:\Users\rjrie\Documents\neural_signal_db\quality_control\runs\current,S002_run07,"[50, 60]","[1.0, 40.0]",[],[np.str_('Af7.')],64
+C:\Users\rjrie\Documents\neural_signal_db\quality_control\runs\current,S002_run11,"[50, 60]","[1.0, 40.0]",[],[np.str_('Af7.')],64

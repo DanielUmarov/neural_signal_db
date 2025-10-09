@@ -1,0 +1,13 @@
+{
+  "source_edf": "C:\\Users\\rjrie\\Documents\\neural_signal_db\\recordings\\public\\physionet_MI\\raw\\S001_run03.edf",
+  "picked_channel": "P8..",
+  "notch_freqs": [
+    50,
+    60
+  ],
+  "bandpass": [
+    1.0,
+    40.0
+  ],
+  "n_eeg_channels": 64
+}

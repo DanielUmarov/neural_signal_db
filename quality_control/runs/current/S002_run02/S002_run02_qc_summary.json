@@ -1,0 +1,21 @@
+{
+  "file": "C:\\Users\\rjrie\\Documents\\neural_signal_db\\recordings\\public\\physionet_MI\\raw\\S002_run02.edf",
+  "stem": "S002_run02",
+  "suggested_notch_freqs": [
+    50,
+    60
+  ],
+  "bandpass_hint_hz": [
+    1.0,
+    40.0
+  ],
+  "flat_channels": [],
+  "high_variance_channels": [],
+  "n_channels": 64,
+  "eog_channels_listed": [],
+  "outputs": {
+    "metrics_csv": "C:\\Users\\rjrie\\Documents\\neural_signal_db\\quality_control\\runs\\current\\S002_run02\\S002_run02_qc_metrics.csv",
+    "summary_json": "C:\\Users\\rjrie\\Documents\\neural_signal_db\\quality_control\\runs\\current\\S002_run02\\S002_run02_qc_summary.json"
+  },
+  "notes": "Use a separate notebook to convert these metrics into filtering settings."
+}
